@@ -3,7 +3,7 @@ name: Build & Deploy SEC 1.05 Feed
 on:
   workflow_dispatch:
   schedule:
-    - cron: "15 * * * *"   # hourly at :15 (UTC)
+    - cron: "15 * * * *"   # hourly at :15 past
   push:
     paths:
       - edgar_105_to_json.py
