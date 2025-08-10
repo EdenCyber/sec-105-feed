@@ -1,51 +1,46 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>SEC 8-K Item 1.05 Feed</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SEC 1.05 Feed</title>
   <style>
-    body{font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial; margin: 20px;}
-    .meta{opacity:.8;margin-bottom:1rem;display:flex;gap:1rem;flex-wrap:wrap}
-    table{border-collapse:collapse;width:100%}
-    th, td{border-bottom:1px solid #e5e7eb;padding:.5rem;text-align:left}
-    tbody tr:hover{background:#fafafa}
-    .wrap{overflow:auto;max-height:70vh;border:1px solid #e5e7eb;border-radius:.5rem}
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #dadada; padding: 8px; text-align: left; }
+    th { background: #f8f8f8; position: sticky; top: 0; }
+    .muted { color: #666; font-size: 0.9em; }
   </style>
 </head>
 <body>
-  <h1>SEC 8-K Item 1.05 “Material Cybersecurity Incidents”</h1>
-  <div class="meta" id="meta"></div>
-  <div class="wrap">
-    <table id="tbl">
-      <thead><tr>
-        <th>Company</th><th>Ticker</th><th>Filing Date</th><th>Filing</th><th>Doc</th><th>Δ Price %</th>
-      </tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
+  <h1>SEC Item 1.05 (Material Cybersecurity Incidents)</h1>
+  <p class="muted">Data generated hourly from EDGAR search.</p>
+  <div id="stats" class="muted"></div>
+  <table id="tbl">
+    <thead>
+      <tr><th>Date</th><th>Company</th><th>Ticker</th><th>Price Δ</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
 <script>
-async function load(){
-  const res = await fetch('./sec-105.json', {cache:'no-store'});
-  const data = await res.json();
-  document.getElementById('meta').textContent =
-    `Range: ${data.start_date} → ${data.end_date} · Generated: ${data.generated_at} · Count: ${data.count}`;
-  const tb = document.querySelector('#tbl tbody');
-  tb.innerHTML='';
-  data.results.forEach(r => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${r.company_name||''}</td>
-      <td>${r.ticker||''}</td>
-      <td>${r.filing_date||''}</td>
-      <td><a href="${r.filing_href}" target="_blank" rel="noopener">Index</a></td>
-      <td><a href="${r.document_href}" target="_blank" rel="noopener">Doc</a></td>
-      <td>${(r.pct_change===null||r.pct_change===undefined)?'—':Number(r.pct_change).toFixed(2)}</td>
-    `;
-    tb.appendChild(tr);
-  });
-}
-load();
+(async () => {
+  try {
+    const r = await fetch("./sec-105.json", { cache: "no-store" });
+    const data = await r.json();
+    document.getElementById("stats").textContent =
+      `Generated: ${new Date(data.generated_at).toLocaleString()} | Range: ${data.start_date} → ${data.end_date} | Count: ${data.count}`;
+    const rows = data.results.map(x => `
+      <tr>
+        <td>${x.filing_date || ""}</td>
+        <td><a href="${x.filing_href}" target="_blank" rel="noopener">${x.company_name || ""}</a></td>
+        <td>${x.ticker || ""}</td>
+        <td>${(x.pct_change ?? "") === "" ? "" : (Number(x.pct_change).toFixed(2) + "%")}</td>
+      </tr>`).join("");
+    document.querySelector("#tbl tbody").innerHTML = rows;
+  } catch (e) {
+    document.body.insertAdjacentHTML("beforeend", `<pre>${e}</pre>`);
+  }
+})();
 </script>
 </body>
 </html>
