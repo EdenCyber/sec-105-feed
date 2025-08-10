@@ -1,0 +1,52 @@
+name: Build & Deploy SEC 1.05 Feed
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 * * * *"   # runs hourly at :15 past
+  push:
+    paths:
+      - edgar_105_to_json.py
+      - requirements.txt
+      - public/**
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: read
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: pip install -r requirements.txt
+      - name: Generate feed
+        run: python edgar_105_to_json.py --out public/sec-105.json --days 180
+        env:
+          # Optional but recommended: set a SEC contact email in repo secrets
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+      - uses: actions/configure-pages@v5
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./public
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
