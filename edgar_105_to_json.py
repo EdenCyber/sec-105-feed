@@ -7,24 +7,50 @@ Intended to be run by GitHub Actions, but can also be run locally.
 Usage (local):
   python3 edgar_105_to_json.py --out public/sec-105.json --days 180
 """
-import requests, json, re, argparse
+import os, time, random, requests, json, re, argparse
 from datetime import datetime, timedelta
 import pandas as pd
 import yfinance as yf
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-USER_AGENT = 'Eden Cyber (edencyber.com) via GitHub Actions'
+# ---- SEC fair-access: include contact + retries/backoff ----
+CONTACT = os.getenv("SEC_CONTACT_EMAIL", "security@edencyber.com")
+USER_AGENT = os.getenv(
+    "SEC_USER_AGENT",
+    f"EdenCyber/sec-105-feed (+https://edencyber.com; contact: {CONTACT})"
+)
+
+session = requests.Session()
+retry = Retry(
+    total=5,
+    backoff_factor=1.0,
+    status_forcelist=[403, 429, 500, 502, 503, 504],
+    allowed_methods=["GET"],
+)
+session.mount("https://", HTTPAdapter(max_retries=retry))
+session.headers.update({
+    "User-Agent": USER_AGENT,
+    "Accept": "application/json",
+    "Accept-Encoding": "gzip, deflate",
+})
+
+def _polite_sleep():
+    # Small jitter between requests (SEC fair-access)
+    time.sleep(0.2 + random.random() * 0.5)
 
 def get_timestamp_from_index(index_href):
-    headers = { 'User-Agent': USER_AGENT }
-    r = requests.get(index_href, headers=headers, timeout=30)
+    # Override Accept for HTML page
+    r = session.get(index_href, headers={"Accept": "text/html"}, timeout=30)
     r.raise_for_status()
-    match = re.findall('<div class="info">(.*?)</div>', r.text)
+    match = re.findall(r'<div class="info">(.*?)</div>', r.text)
+    _polite_sleep()
     if len(match) >= 2:
         return match[1]
     return None
 
 def get_filings(start_date, end_date, max_results=999999):
-    base_url = "https://efts.sec.gov/LATEST/search-index"
+    base_url = "https://efts.sec.gov/LATEST/search-index")
     results = []
     fetched = 0
     page_size = 100
@@ -32,7 +58,7 @@ def get_filings(start_date, end_date, max_results=999999):
 
     while fetched < max_results:
         query = {
-            'q':'"Material Cybersecurity Incidents" OR "Item 1.05"',
+            'q': '"Material Cybersecurity Incidents" OR "Item 1.05"',
             'forms': '8-K',
             'startdt': start_date,
             'enddt': end_date,
@@ -40,19 +66,17 @@ def get_filings(start_date, end_date, max_results=999999):
             'size': page_size,
             'sort': 'desc'
         }
-        headers = {'User-Agent': USER_AGENT, 'Accept': 'application/json'}
-        resp = requests.get(base_url, headers=headers, params=query, timeout=30)
+        resp = session.get(base_url, params=query, timeout=30)
         resp.raise_for_status()
-
         data = resp.json()
-        filings = data['hits']['hits']
+        filings = data.get('hits', {}).get('hits', [])
         if total_available is None:
-            total_available = data['hits']['total']['value']
+            total_available = data.get('hits', {}).get('total', {}).get('value', 0)
         if not filings:
             break
 
         for f in filings:
-            src = f['_source']
+            src = f.get('_source', {})
             display_names = src.get('display_names', [])
             company_name = display_names[0] if display_names else 'N/A'
             ciks = src.get('ciks', [])
@@ -60,15 +84,14 @@ def get_filings(start_date, end_date, max_results=999999):
             filing_date = src.get('file_date', 'N/A')
             form_type = src.get('form', 'N/A')
             adsh = src.get('adsh', 'N/A')
-            doc_id = f.get('_id', 'N/A').split(':')[1] if f.get('_id') else 'N/A'
+            doc_id = (f.get('_id', 'N/A').split(':')[1] if f.get('_id') else 'N/A')
             filing_href = f"https://www.sec.gov/Archives/edgar/data/{cik}/{adsh.replace('-', '')}/{adsh}-index.htm"
             document_href = f"https://www.sec.gov/Archives/edgar/data/{cik}/{adsh.replace('-', '')}/{doc_id}"
 
             # Derive ticker from display name if present
-            import re as _re
             ticker = 'N/A'
             if display_names:
-                m = _re.findall(r'\((.*?)\)', display_names[0])
+                m = re.findall(r'\((.*?)\)', display_names[0])
                 if m and not m[0].startswith("CIK "):
                     ticker = m[0].split(",")[0]
 
@@ -86,6 +109,7 @@ def get_filings(start_date, end_date, max_results=999999):
             })
 
         fetched += len(filings)
+        _polite_sleep()  # pause between pages
         if fetched >= total_available or len(filings) < page_size:
             break
 
@@ -98,15 +122,24 @@ def analyze_impact(ticker, filing_date):
         fd = pd.to_datetime(filing_date).normalize()
     except Exception:
         return None, None, None
+    # Skip same-day because market data may be incomplete
     if fd.date() == datetime.utcnow().date():
         return None, None, None
 
     start_delta = 1
     end_delta = 1
     while (start_delta + end_delta) < 10:
-        dr = pd.bdate_range(start=fd - pd.Timedelta(days=start_delta), end=fd + pd.Timedelta(days=end_delta)).normalize()
+        dr = pd.bdate_range(
+            start=fd - pd.Timedelta(days=start_delta),
+            end=fd + pd.Timedelta(days=end_delta)
+        ).normalize()
         try:
-            df = yf.download(ticker, start=dr.min().strftime('%Y-%m-%d'), end=(dr.max() + pd.Timedelta(days=1)).strftime('%Y-%m-%d'), progress=False)
+            df = yf.download(
+                ticker,
+                start=dr.min().strftime('%Y-%m-%d'),
+                end=(dr.max() + pd.Timedelta(days=1)).strftime('%Y-%m-%d'),
+                progress=False
+            )
         except Exception:
             return None, None, None
         if df.empty:
@@ -134,7 +167,8 @@ def main():
     filings = get_filings(start_date, end_date)
     enriched = []
     for f in filings:
-        before, after, pct = analyze_impact(f.get('ticker'), (f.get('published_timestamp') or f.get('filing_date')).split(' ')[0])
+        ts = (f.get('published_timestamp') or f.get('filing_date') or '').split(' ')[0]
+        before, after, pct = analyze_impact(f.get('ticker'), ts)
         f['price_before'] = before
         f['price_after'] = after
         f['pct_change'] = pct
@@ -148,6 +182,7 @@ def main():
         "results": enriched
     }
 
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as fp:
         json.dump(payload, fp, indent=2)
     print(f"Wrote {len(enriched)} records to {args.out}")
