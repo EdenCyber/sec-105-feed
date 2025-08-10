@@ -50,7 +50,7 @@ def get_timestamp_from_index(index_href):
     return None
 
 def get_filings(start_date, end_date, max_results=999999):
-    base_url = "https://efts.sec.gov/LATEST/search-index")
+    base_url = "https://efts.sec.gov/LATEST/search-index"
     results = []
     fetched = 0
     page_size = 100
