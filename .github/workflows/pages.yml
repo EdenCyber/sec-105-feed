@@ -15,7 +15,6 @@ permissions:
   contents: read
   pages: write
   id-token: write
-  actions: read
 
 concurrency:
   group: "pages"
@@ -24,6 +23,10 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Expose secrets as env so we can reference env.* in if:
+    env:
+      PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
+      PUSHOVER_USER_KEY:  ${{ secrets.PUSHOVER_USER_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -37,13 +40,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Generate the latest JSON feed
       - name: Generate feed
         run: python edgar_105_to_json.py --out public/sec-105.json --days 180
         env:
           SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
 
-      # ---- Diff against last published feed to detect NEW items ----
+      # ---- Diff against last published feed ----
       - name: Fetch previously published feed
         run: |
           curl -fsSL https://edencyber.github.io/sec-105-feed/sec-105.json -o old.json \
@@ -59,34 +61,28 @@ jobs:
             old = json.load(open('old.json'))
           except Exception:
             old = {"results": []}
-
           def rec_id(x):
             return x.get('document_href') or x.get('filing_href') or f"{x.get('cik')}-{x.get('filing_date')}"
-
           old_ids = {rec_id(x) for x in old.get('results', []) if rec_id(x)}
           fresh = [x for x in new.get('results', []) if rec_id(x) not in old_ids]
-
           with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
             fh.write(f"has_new={'true' if fresh else 'false'}\n")
             if fresh:
               first = fresh[0]
-              title = f"New SEC 1.05 filing: {first.get('company_name','')}"
-              msg = f"{first.get('company_name','')} ({first.get('ticker','')}) on {first.get('filing_date','')}"
-              url = first.get('filing_href','https://edencyber.com/')
-              fh.write(f"title={title}\n")
-              fh.write(f"msg={msg}\n")
-              fh.write(f"url={url}\n")
+              fh.write(f"title=New SEC 1.05 filing: {first.get('company_name','')}\n")
+              fh.write(f"msg={first.get('company_name','')} ({first.get('ticker','')}) on {first.get('filing_date','')}\n")
+              fh.write(f"url={first.get('filing_href','https://edencyber.com/')}\n")
           PY
 
-      # ---- Mobile push via Pushover (runs only when new items exist) ----
-      - name: Pushover notify (optional)
-        if: ${{ steps.diff.outputs.has_new == 'true' && secrets.PUSHOVER_APP_TOKEN && secrets.PUSHOVER_USER_KEY }}
+      # ---- Mobile push via Pushover ----
+      - name: Pushover notify
+        if: ${{ steps.diff.outputs.has_new == 'true' && env.PUSHOVER_APP_TOKEN != '' && env.PUSHOVER_USER_KEY != '' }}
         env:
-          APP: ${{ secrets.PUSHOVER_APP_TOKEN }}
-          USER: ${{ secrets.PUSHOVER_USER_KEY }}
+          APP:  ${{ env.PUSHOVER_APP_TOKEN }}
+          USER: ${{ env.PUSHOVER_USER_KEY }}
           TITLE: ${{ steps.diff.outputs.title }}
-          MSG: ${{ steps.diff.outputs.msg }}
-          URL: ${{ steps.diff.outputs.url }}
+          MSG:   ${{ steps.diff.outputs.msg }}
+          URL:   ${{ steps.diff.outputs.url }}
         run: |
           curl -sS -X POST https://api.pushover.net/1/messages.json \
             -d token="$APP" \
@@ -111,3 +107,4 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
