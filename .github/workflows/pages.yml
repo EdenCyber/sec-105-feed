@@ -3,13 +3,13 @@ name: Build & Deploy SEC 1.05 Feed
 on:
   workflow_dispatch:
   schedule:
-    - cron: "15 * * * *"   # hourly at :15 past
+    - cron: "15 * * * *"   # hourly at :15 (UTC)
   push:
     paths:
       - edgar_105_to_json.py
       - requirements.txt
-      - .github/workflows/pages.yml
       - public/**
+      - .github/workflows/pages.yml
 
 permissions:
   contents: read
@@ -37,12 +37,63 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Generate the latest JSON
+      # Generate the latest JSON feed
       - name: Generate feed
         run: python edgar_105_to_json.py --out public/sec-105.json --days 180
         env:
-          # REQUIRED: set this in repo Settings → Secrets and variables → Actions
           SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+
+      # ---- Diff against last published feed to detect NEW items ----
+      - name: Fetch previously published feed
+        run: |
+          curl -fsSL https://edencyber.github.io/sec-105-feed/sec-105.json -o old.json \
+          || (echo '{"results":[]}' > old.json)
+
+      - id: diff
+        name: Find new entries
+        run: |
+          python - <<'PY'
+          import os, json
+          new = json.load(open('public/sec-105.json'))
+          try:
+            old = json.load(open('old.json'))
+          except Exception:
+            old = {"results": []}
+
+          def rec_id(x):
+            return x.get('document_href') or x.get('filing_href') or f"{x.get('cik')}-{x.get('filing_date')}"
+
+          old_ids = {rec_id(x) for x in old.get('results', []) if rec_id(x)}
+          fresh = [x for x in new.get('results', []) if rec_id(x) not in old_ids]
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+            fh.write(f"has_new={'true' if fresh else 'false'}\n")
+            if fresh:
+              first = fresh[0]
+              title = f"New SEC 1.05 filing: {first.get('company_name','')}"
+              msg = f"{first.get('company_name','')} ({first.get('ticker','')}) on {first.get('filing_date','')}"
+              url = first.get('filing_href','https://edencyber.com/')
+              fh.write(f"title={title}\n")
+              fh.write(f"msg={msg}\n")
+              fh.write(f"url={url}\n")
+          PY
+
+      # ---- Mobile push via Pushover (runs only when new items exist) ----
+      - name: Pushover notify (optional)
+        if: ${{ steps.diff.outputs.has_new == 'true' && secrets.PUSHOVER_APP_TOKEN && secrets.PUSHOVER_USER_KEY }}
+        env:
+          APP: ${{ secrets.PUSHOVER_APP_TOKEN }}
+          USER: ${{ secrets.PUSHOVER_USER_KEY }}
+          TITLE: ${{ steps.diff.outputs.title }}
+          MSG: ${{ steps.diff.outputs.msg }}
+          URL: ${{ steps.diff.outputs.url }}
+        run: |
+          curl -sS -X POST https://api.pushover.net/1/messages.json \
+            -d token="$APP" \
+            -d user="$USER" \
+            -d title="$TITLE" \
+            -d message="$MSG" \
+            -d url="$URL"
 
       # ---- Publish to GitHub Pages ----
       - uses: actions/configure-pages@v5
@@ -50,14 +101,13 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./public
+          path: public
 
   deploy:
     needs: build
+    runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
